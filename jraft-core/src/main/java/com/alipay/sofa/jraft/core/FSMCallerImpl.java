@@ -232,6 +232,8 @@ public class FSMCallerImpl implements FSMCaller {
             LOG.warn("FSMCaller is stopped, can not apply new task.");
             return false;
         }
+
+        // 处理类为 ApplyTaskHandler
         if (!this.taskQueue.tryPublishEvent(tpl)) {
             setError(new RaftException(ErrorType.ERROR_TYPE_STATE_MACHINE, new Status(RaftError.EBUSY,
                 "FSMCaller is overload.")));

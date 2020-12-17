@@ -230,6 +230,8 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         this.fsmCaller = opts.getFsmCaller();
         this.node = opts.getNode();
         this.term = opts.getInitTerm();
+
+        // 创建快照存储服务，基于 LocalSnapshotStorage 实现类
         this.snapshotStorage = this.node.getServiceFactory().createSnapshotStorage(opts.getUri(),
             this.node.getRaftOptions());
         if (opts.isFilterBeforeCopyRemote()) {
@@ -238,6 +240,8 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         if (opts.getSnapshotThrottle() != null) {
             this.snapshotStorage.setSnapshotThrottle(opts.getSnapshotThrottle());
         }
+
+        // 初始化，只保留最后一个生成的快照，将别的快照都删除
         if (!this.snapshotStorage.init(null)) {
             LOG.error("Fail to init snapshot storage.");
             return false;
@@ -246,10 +250,14 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         if (tmp != null && !tmp.hasServerAddr()) {
             tmp.setServerAddr(opts.getAddr());
         }
+
+        // 打开快照文件读取器
         final SnapshotReader reader = this.snapshotStorage.open();
         if (reader == null) {
             return true;
         }
+
+        // 获取快照的 meta 信息，这个信息也是用 protobuf 协议序列化存储的
         this.loadingSnapshotMeta = reader.load();
         if (this.loadingSnapshotMeta == null) {
             LOG.error("Fail to load meta from {}.", opts.getUri());
@@ -260,6 +268,8 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         this.loadingSnapshot = true;
         this.runningJobs.incrementAndGet();
         final FirstSnapshotLoadDone done = new FirstSnapshotLoadDone(reader);
+
+        // 加载最近一次的快照数据
         Requires.requireTrue(this.fsmCaller.onSnapshotLoad(done));
         try {
             done.waitForRun();

@@ -64,6 +64,7 @@ public class LocalRaftMetaStorage implements RaftMetaStorage {
         this.raftOptions = raftOptions;
     }
 
+    // Meta 信息以 protobuf 协议序列化后存到了本地文件，这里直接读取本地文件，然后反序列化出 meta 的信息
     @Override
     public boolean init(final RaftMetaStorageOptions opts) {
         if (this.isInited) {

@@ -142,8 +142,8 @@ public class RocksDBLogStorage implements LogStorage, Describer {
     private DBOptions                       dbOptions;
     private WriteOptions                    writeOptions;
     private final List<ColumnFamilyOptions> cfOptions     = new ArrayList<>();
-    private ColumnFamilyHandle              defaultHandle;
-    private ColumnFamilyHandle              confHandle;
+    private ColumnFamilyHandle              defaultHandle; // 除了包含 confHandle 中的数据之外，还用于存储用户数据相关的 LogEntry 实例
+    private ColumnFamilyHandle              confHandle; // 用于存储集群节点配置相关的 LogEntry 实例
     private ReadOptions                     totalOrderReadOptions;
     private DebugStatistics                 statistics;
     private final ReadWriteLock             readWriteLock = new ReentrantReadWriteLock();
@@ -187,6 +187,8 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                 LOG.warn("RocksDBLogStorage init() already.");
                 return true;
             }
+
+            // 编解码器
             this.logEntryDecoder = opts.getLogEntryCodecFactory().decoder();
             this.logEntryEncoder = opts.getLogEntryCodecFactory().encoder();
             Requires.requireNonNull(this.logEntryDecoder, "Null log entry decoder");
@@ -202,6 +204,7 @@ public class RocksDBLogStorage implements LogStorage, Describer {
             this.totalOrderReadOptions = new ReadOptions();
             this.totalOrderReadOptions.setTotalOrderSeek(true);
 
+            // 打开本地存储引擎 RocksDB，并从本地 conf 日志中恢复集群节点配置和 firstLogIndex 数据
             return initAndLoad(opts.getConfigurationManager());
         } catch (final RocksDBException e) {
             LOG.error("Fail to init RocksDBLogStorage, path={}.", this.path, e);
@@ -224,6 +227,8 @@ public class RocksDBLogStorage implements LogStorage, Describer {
         columnFamilyDescriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOption));
 
         openDB(columnFamilyDescriptors);
+
+        // 从 conf 中加载集群节点配置，以及 firstLogIndex 值，并从本地剔除 firstLogIndex 之前的 conf 和 data 数据
         load(confManager);
         return onInitLoaded();
     }
@@ -233,8 +238,10 @@ public class RocksDBLogStorage implements LogStorage, Describer {
      */
     public static final byte[] FIRST_LOG_IDX_KEY = Utils.getBytes("meta/firstLogIndex");
 
+    //该方法会从头遍历 conf family 中的数据，以从中加载之前集群节点的配置信息和 firstLogIndex 值
     private void load(final ConfigurationManager confManager) {
         checkState();
+        // 按顺序从头开始遍历处理 RocksDB Conf ColumnFamily 中的数据
         try (final RocksIterator it = this.db.newIterator(this.confHandle, this.totalOrderReadOptions)) {
             it.seekToFirst();
             while (it.isValid()) {
@@ -246,6 +253,7 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                     final LogEntry entry = this.logEntryDecoder.decode(bs);
                     if (entry != null) {
                         if (entry.getType() == EntryType.ENTRY_TYPE_CONFIGURATION) {
+                            // 基于日志数据设置集群节点配置
                             final ConfigurationEntry confEntry = new ConfigurationEntry();
                             confEntry.setId(new LogId(entry.getId().getIndex(), entry.getId().getTerm()));
                             confEntry.setConf(new Configuration(entry.getPeers(), entry.getLearners()));
@@ -261,8 +269,11 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                             BytesUtil.toHex(bs));
                     }
                 } else {
+                    // 不是 LogEntry，目前只能是 meta/firstLogIndex，用于记录 firstLogIndex 值
                     if (Arrays.equals(FIRST_LOG_IDX_KEY, ks)) {
+                        // 初始化 firstLogIndex
                         setFirstLogIndex(Bits.getLong(bs, 0));
+                        // 剔除 [0, firstLogIndex) 之间的 conf 和 data 数据
                         truncatePrefixInBackground(0L, this.firstLogIndex);
                     } else {
                         LOG.warn("Unknown entry in configuration storage key={}, value={}.", BytesUtil.toHex(ks),
@@ -538,9 +549,11 @@ public class RocksDBLogStorage implements LogStorage, Describer {
             for (int i = 0; i < entriesCount; i++) {
                 final LogEntry entry = entries.get(i);
                 if (entry.getType() == EntryType.ENTRY_TYPE_CONFIGURATION) {
+                    // 写入 defaultHandle 和 confHandle 中
                     addConfBatch(entry, batch);
                 } else {
                     writeCtx.startJob();
+                    // 只写入 defaultHandle
                     addDataBatch(entry, batch, writeCtx);
                 }
             }
@@ -581,6 +594,7 @@ public class RocksDBLogStorage implements LogStorage, Describer {
                     return;
                 }
                 onTruncatePrefix(startIndex, firstIndexKept);
+                // 剔除 [startIndex, firstIndexKept) 之间的 conf 和 data 数据
                 this.db.deleteRange(this.defaultHandle, getKeyBytes(startIndex), getKeyBytes(firstIndexKept));
                 this.db.deleteRange(this.confHandle, getKeyBytes(startIndex), getKeyBytes(firstIndexKept));
             } catch (final RocksDBException | IOException e) {

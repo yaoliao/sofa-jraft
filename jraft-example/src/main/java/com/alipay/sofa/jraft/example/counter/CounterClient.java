@@ -56,10 +56,10 @@ public class CounterClient {
 
         final PeerId leader = RouteTable.getInstance().selectLeader(groupId);
         System.out.println("Leader is " + leader);
-        final int n = 1000;
+        final int n = 2;
         final CountDownLatch latch = new CountDownLatch(n);
         final long start = System.currentTimeMillis();
-        for (int i = 0; i < n; i++) {
+        for (int i = 1; i < n; i++) {
             incrementAndGet(cliClientService, leader, i, latch);
         }
         latch.await();
